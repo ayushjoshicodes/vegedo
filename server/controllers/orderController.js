@@ -86,7 +86,7 @@ export const placeOrderStripe = async (req, res) => {
         product_data: {
           name: item.name,
         },
-        unit_amount : Math.floor(item.price * (1.02))
+        unit_amount : Math.floor(item.price * (1.02) * 100)
       },
       quantity: item.quantity,
     }
@@ -104,7 +104,7 @@ export const placeOrderStripe = async (req, res) => {
       },
     });
 
-    //await newOrder.save();
+    await newOrder.save();
 
     res.status(201).json({
       success: true,
@@ -118,63 +118,75 @@ export const placeOrderStripe = async (req, res) => {
 };
 
 export const stripeWebhooks = async (request, response) => {
-  const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY);
 
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
   const sig = request.headers["stripe-signature"];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   let event;
 
   try {
     event = stripe.webhooks.constructEvent(request.body, sig, endpointSecret);
+    console.log("✅ Event verified:", event.type);
   } catch (err) {
-    console.error("Webhook signature verification failed:", err.message);
+    console.error("❌ Webhook signature verification failed:", err.message);
     return response.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Handle the event
-  switch (event.type) {
-    case "payment_intent.succeeded": {
-      const paymentIntent = event.data.object;
-      const paymentIntentId = paymentIntent.id;
+  try {
+    switch (event.type) {
+      case "payment_intent.succeeded": {
+        const paymentIntent = event.data.object;
+        const paymentIntentId = paymentIntent.id;
+        console.log("✅ Payment intent succeeded for", paymentIntentId);
 
-      // Getting Session Metadata
-      const session = await stripe.checkout.sessions.list({
-        payment_intent: paymentIntentId,
-      });
+        const sessionList = await stripe.checkout.sessions.list({
+          payment_intent: paymentIntentId,
+        });
 
-      const { orderId, userId } = session.data[0].metadata;
+        if (!sessionList.data.length) {
+          console.error("❌ No session found for payment intent");
+          return response.status(404).send("No session found");
+        }
 
-      // ✅ Mark payment as paid in the database
-      await Order.findByIdAndUpdate(orderId, {
-        isPaid: true,
-      });
-      await User.findByIdAndUpdate(userId, { cartItems: [] });
+        const { orderId, userId } = sessionList.data[0].metadata;
 
-      console.log(`✅ Payment confirmed for Order ${orderId}`);
-      break;
+        await Order.findByIdAndUpdate(orderId, { isPaid: true });
+        await User.findByIdAndUpdate(userId, { cartItems: [] });
+
+        console.log(`✅ Payment confirmed for Order ${orderId}`);
+        break;
+      }
+
+      case "payment_intent.payment_failed": {
+        const paymentIntent = event.data.object;
+        const paymentIntentId = paymentIntent.id;
+        console.log("❌ Payment failed for", paymentIntentId);
+
+        const sessionList = await stripe.checkout.sessions.list({
+          payment_intent: paymentIntentId,
+        });
+
+        if (!sessionList.data.length) {
+          console.error("❌ No session found for failed payment");
+          return response.status(404).send("No session found");
+        }
+
+        const { orderId } = sessionList.data[0].metadata;
+        await Order.findByIdAndDelete(orderId);
+        console.log(`🗑️ Deleted unpaid Order ${orderId}`);
+        break;
+      }
+
+      default:
+        console.log(`⚠️ Unhandled event type: ${event.type}`);
     }
 
-    case "payment_intent.payment_failed": {
-      const paymentIntent = event.data.object;
-      const paymentIntentId = paymentIntent.id;
-
-      // Getting Session Metadata
-      const session = await stripeInstance.checkout.sessions.list({
-        payment_intent: paymentIntentId,
-      });
-
-      const { orderId } = session.data[0].metadata;
-      await Order.findByIdAndDelete(orderId);
-      break;
-    }
-
-    default:
-      console.log(`Unhandled event type: ${event.type}`);
+    return response.json({ received: true });
+  } catch (err) {
+    console.error("❌ Error in webhook processing:", err.message);
+    return response.status(500).send("Internal Server Error");
   }
-
-  response.json({recieved : true});
 };
 
 // Get Orders by User ID : /api/order/user
