@@ -13,7 +13,7 @@ import { stripeWebhooks } from "./controllers/orderController.js";
 
 const app = express();
 const port = process.env.PORT || 4000;
-const allowedOrigins = ["http://localhost:5173"];
+const allowedOrigins = ["http://localhost:5173" , "https://vegedo.onrender.com"];
 
 app.use((req, res, next) => {
   if (req.originalUrl === "/stripe") {
