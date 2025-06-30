@@ -15,11 +15,20 @@ const app = express();
 const port = process.env.PORT || 4000;
 const allowedOrigins = ["http://localhost:5173"];
 
+app.use((req, res, next) => {
+  if (req.originalUrl === "/stripe") {
+    next(); // don't parse body
+  } else {
+    express.json()(req, res, next); // parse JSON for all other routes
+  }
+});
+
+// ✅ Stripe webhook with raw body
 app.post("/stripe", express.raw({ type: "application/json" }), stripeWebhooks);
 
 await connectDB()
 
-app.use(express.json());
+//app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
     origin : allowedOrigins,
